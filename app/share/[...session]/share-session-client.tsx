@@ -131,6 +131,12 @@ function buildAtprotoAtUriUrl(sourceUri: string): string | null {
   return `https://atproto.at/uri/${encodeURIComponent(sourceUri)}`
 }
 
+function isTilesSessionSnapshotRecord(sourceUri: string): boolean {
+  const collection = sourceUri.match(/^at:\/\/[^/]+\/([^/]+)\//)?.[1]
+
+  return collection === "run.tiles.chat.sessionSnapshot"
+}
+
 function buildBlueskyProfileUrl(handle: string | null, did: string): string {
   const normalizedHandle = handle?.trim().replace(/^@+/, "")
   const profileId =
@@ -1163,6 +1169,10 @@ export function ShareSessionClient({
     () => buildAtprotoAtUriUrl(sharedSession?.sourceUri ?? ""),
     [sharedSession?.sourceUri],
   )
+  const isTilesLexiconRecord = useMemo(
+    () => isTilesSessionSnapshotRecord(sharedSession?.sourceUri ?? ""),
+    [sharedSession?.sourceUri],
+  )
   const blueskyProfileUrl = useMemo(() => {
     if (!sharedSession) {
       return ""
@@ -1348,8 +1358,9 @@ export function ShareSessionClient({
                   </span>
                   <span className="mt-1 block">
                     <span>
-                      Data is fetched from the user&apos;s PDS as a Tiles
-                      lexicon record&nbsp;
+                      {isTilesLexiconRecord
+                        ? "Data is fetched from the user's PDS as a Tiles lexicon record "
+                        : "Data is fetched from the user's PDS "}
                     </span>
                     {atprotoUriUrl ? (
                       <a
