@@ -58,7 +58,7 @@ export default function Home() {
           <p className="text-muted-foreground">
             The resulting link opens in this shape:
           </p>
-          <pre className="overflow-x-auto font-mono text-sm leading-6 text-foreground">{`https://share.tiles.run/<conversation-ID>`}</pre>
+          <pre className="overflow-x-auto font-mono text-sm leading-6 text-foreground">{`https://chat.tiles.run/<conversation-ID>`}</pre>
         </div>
       </section>
 
