@@ -10,7 +10,7 @@ export const metadata: Metadata = {
     description: "Shared public chat session on Tiles. Powered by ATProto.",
     images: [
       {
-        url: `${SHARE_APP_ORIGIN}/api/share/og`,
+        url: `${SHARE_APP_ORIGIN}/api/og`,
         width: 1200,
         height: 630,
         alt: "Shared public chat session on Tiles. Powered by ATProto.",
@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Shared chat session | Tiles",
     description: "Shared public chat session on Tiles. Powered by ATProto.",
-    images: [`${SHARE_APP_ORIGIN}/api/share/og`],
+    images: [`${SHARE_APP_ORIGIN}/api/og`],
   },
 }
 

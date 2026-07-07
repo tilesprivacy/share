@@ -38,7 +38,7 @@ export async function generateMetadata({
 }: SharePageProps): Promise<Metadata> {
   const { session } = await params
   const shareToken = session.join("/")
-  const imagePath = `${SHARE_APP_ORIGIN}/api/share/og?session=${encodeURIComponent(shareToken)}`
+  const imagePath = `${SHARE_APP_ORIGIN}/api/og?session=${encodeURIComponent(shareToken)}`
   let title = "Shared chat session | Tiles"
   let description = DEFAULT_SHARED_SESSION_DESCRIPTION
 
