@@ -176,14 +176,21 @@ body {
   padding: 0.75rem;
   font-size: 0.82rem;
   line-height: 1.5rem;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  white-space: normal;
   color: rgb(0 0 0 / 0.8);
 }
 
 .share-markdown [data-streamdown='code-block'] :where(pre, code, span) {
-  white-space: pre-wrap !important;
-  overflow-wrap: anywhere;
+  white-space: pre !important;
+  overflow-wrap: normal;
+}
+
+.share-markdown [data-streamdown='code-block'] code > span {
+  display: block;
+}
+
+.share-markdown [data-streamdown='code-block'] code > span > span {
+  display: inline;
 }
 
 .dark .share-markdown [data-streamdown='code-block'] {

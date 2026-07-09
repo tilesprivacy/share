@@ -690,6 +690,7 @@ function parseToolResultContent(content: string): {
 function ToolResultCard({ content }: { content: string }) {
   const { toolName, output } = parseToolResultContent(content)
   const normalizedToolName = toolName?.toLowerCase()
+  const isLongOutput = output.length > 1800 || output.split("\n").length > 24
   const icon =
     normalizedToolName === "bash" || normalizedToolName === "shell"
       ? "terminal"
@@ -711,7 +712,17 @@ function ToolResultCard({ content }: { content: string }) {
       </div>
       {output ? (
         <div className="pl-7">
-          <MarkdownMessage content={output} />
+          <div
+            data-tool-result-scroll-block={isLongOutput ? "" : undefined}
+            className={cn(
+              "min-w-0 rounded-md border border-black/10 bg-black/[0.025] p-3 dark:border-white/10 dark:bg-black/20",
+              isLongOutput
+                ? "max-h-72 overflow-auto overscroll-contain [scrollbar-gutter:stable] print:max-h-none print:overflow-visible"
+                : "",
+            )}
+          >
+            <MarkdownMessage content={output} />
+          </div>
         </div>
       ) : null}
     </div>
