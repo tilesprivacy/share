@@ -200,8 +200,6 @@ function normalizeMessages(contents: unknown): SharedSessionMessage[] {
     return []
   }
 
-  let hasSeenUserMessage = false
-
   return contents.flatMap((entry): SharedSessionMessage[] => {
     if (!entry || typeof entry !== "object") {
       return []
@@ -215,12 +213,8 @@ function normalizeMessages(contents: unknown): SharedSessionMessage[] {
       const message = normalizeMessage(
         role,
         content,
-        role === "user" && !hasSeenUserMessage,
+        role === "user",
       )
-
-      if (role === "user") {
-        hasSeenUserMessage = true
-      }
 
       return [message]
     }
@@ -230,8 +224,7 @@ function normalizeMessages(contents: unknown): SharedSessionMessage[] {
     const messages: SharedSessionMessage[] = []
 
     if (userContent) {
-      messages.push(normalizeMessage("user", userContent, !hasSeenUserMessage))
-      hasSeenUserMessage = true
+      messages.push(normalizeMessage("user", userContent, true))
     }
 
     if (assistantContent) {
@@ -380,8 +373,6 @@ function normalizeSessionSnapshotMessages(
     return []
   }
 
-  let hasSeenUserMessage = false
-
   const messages: SharedSessionMessage[] = []
 
   turns.forEach((turn) => {
@@ -411,8 +402,7 @@ function normalizeSessionSnapshotMessages(
       }
 
       if (rawRole === "user") {
-        const normalized = normalizeMessage("user", content, !hasSeenUserMessage)
-        hasSeenUserMessage = true
+        const normalized = normalizeMessage("user", content, true)
         messages.push(normalized)
         return
       }
