@@ -40,7 +40,7 @@ export default function Home() {
         </h1>
         <p className="mt-6 max-w-2xl text-base leading-7 text-muted-foreground">
           Tiles Share opens chat sessions created from the Tiles app. Links
-          resolve to ATProto-backed records, so conversations can be shared
+          resolve to ATproto-backed records, so conversations can be shared
           without copying a transcript into another service.
         </p>
       </section>
@@ -68,7 +68,7 @@ export default function Home() {
         </h2>
         <div className="space-y-4 text-muted-foreground">
           <p>
-            Public links resolve to a chat record on the user&apos;s ATProto
+            Public links resolve to a chat record on the user&apos;s ATproto
             personal data server.
           </p>
           <p>

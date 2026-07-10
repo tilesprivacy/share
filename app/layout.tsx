@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(SHARE_APP_ORIGIN),
   title: "Tiles Share | Shared chat links",
   description:
-    "View and share Tiles chat sessions through ATProto-backed public and private links.",
+    "View and share Tiles chat sessions through ATproto-backed public and private links.",
 };
 
 export default function RootLayout({

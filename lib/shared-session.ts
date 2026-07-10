@@ -591,7 +591,7 @@ async function resolveAtprotoService(repo: string): Promise<string> {
   const endpoint = readString(pds?.serviceEndpoint)
 
   if (!endpoint) {
-    throw new Error("Shared session DID did not advertise an ATProto PDS.")
+    throw new Error("Shared session DID did not advertise an ATproto PDS.")
   }
 
   return endpoint.replace(/\/$/, "")

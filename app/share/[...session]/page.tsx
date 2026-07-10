@@ -11,11 +11,11 @@ interface SharePageProps {
 }
 
 const DEFAULT_SHARED_SESSION_DESCRIPTION =
-  "Shared public chat session on Tiles. Powered by ATProto."
+  "Shared public chat session on Tiles. Powered by ATproto."
 
 function getSharedSessionDescription(isPrivateLink = false): string {
   return isPrivateLink
-    ? "Shared private chat session on Tiles. Powered by ATProto."
+    ? "Shared private chat session on Tiles. Powered by ATproto."
     : DEFAULT_SHARED_SESSION_DESCRIPTION
 }
 
