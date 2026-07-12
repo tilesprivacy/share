@@ -2,7 +2,6 @@
 
 import {
   AlertCircle,
-  Box,
   Brain,
   CalendarDays,
   Check,
@@ -244,47 +243,100 @@ function downloadMarkdownTranscript(
   URL.revokeObjectURL(url)
 }
 
-function MarkdownMessage({ content }: { content: string }) {
-  const normalizedContent = useMemo(
-    () => normalizeShareMathMarkdown(content.replace(/\r\n?/g, "\n")),
-    [content],
-  )
+interface MarkdownFrontmatter {
+  entries: Array<{ key: string; value: string }>
+  body: string
+}
+
+function splitMarkdownFrontmatter(content: string): MarkdownFrontmatter {
+  const match = content.match(/^---\n([\s\S]*?)\n---(?:\n|$)/)
+
+  if (!match) {
+    return { entries: [], body: content }
+  }
+
+  const entries = match[1]
+    .split("\n")
+    .map((line) => line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/))
+    .filter((entry): entry is RegExpMatchArray => entry !== null)
+    .map(([, key, value]) => ({ key, value }))
+
+  return { entries, body: content.slice(match[0].length) }
+}
+
+function MarkdownFrontmatterBlock({
+  entries,
+}: {
+  entries: Array<{ key: string; value: string }>
+}) {
+  if (entries.length === 0) {
+    return null
+  }
 
   return (
-    <Streamdown
-      mode="static"
-      className="share-markdown break-words"
-      urlTransform={transformShareMarkdownUrl}
-      plugins={{ math: shareMathPlugin }}
-      controls={{ table: true, code: false, mermaid: false }}
-      lineNumbers={false}
-      components={{
-        a: ({ href, children, className, node: _node, ...props }) => {
-          const safeHref =
-            typeof href === "string" && isSafeMarkdownUrl(href)
-              ? href
-              : undefined
-          const isLocal = safeHref?.startsWith("/") || safeHref?.startsWith("#")
+    <dl className="share-markdown-frontmatter">
+      {entries.map(({ key, value }) => (
+        <div
+          key={key}
+          className="grid gap-1 border-b border-black/8 py-2 first:pt-0 last:border-b-0 last:pb-0 sm:grid-cols-[6.5rem_minmax(0,1fr)] sm:gap-3"
+        >
+          <dt className="font-mono text-[0.72rem] uppercase tracking-[0.08em] text-black/42 dark:text-white/42">
+            {key}
+          </dt>
+          <dd className="min-w-0 break-words text-[0.86rem] leading-5 text-black/72 dark:text-white/72">
+            {value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
 
-          return (
-            <a
-              {...props}
-              href={safeHref}
-              target={isLocal ? undefined : "_blank"}
-              rel={isLocal ? undefined : "noopener noreferrer"}
-              className={cn(
-                "font-medium text-black underline decoration-black/25 underline-offset-4 transition-colors hover:text-black/80 hover:decoration-black/45 dark:text-white dark:decoration-white/25 dark:hover:text-white/80 dark:hover:decoration-white/45",
-                className,
-              )}
-            >
-              {children}
-            </a>
-          )
-        },
-      }}
-    >
-      {normalizedContent}
-    </Streamdown>
+function MarkdownMessage({ content }: { content: string }) {
+  const { entries, body } = useMemo(
+    () => splitMarkdownFrontmatter(content.replace(/\r\n?/g, "\n")),
+    [content],
+  )
+  const normalizedContent = useMemo(() => normalizeShareMathMarkdown(body), [body])
+
+  return (
+    <div className="grid gap-3">
+      <MarkdownFrontmatterBlock entries={entries} />
+      <Streamdown
+        mode="static"
+        className="share-markdown break-words"
+        urlTransform={transformShareMarkdownUrl}
+        plugins={{ math: shareMathPlugin }}
+        controls={{ table: true, code: false, mermaid: false }}
+        lineNumbers={false}
+        components={{
+          a: ({ href, children, className, node: _node, ...props }) => {
+            const safeHref =
+              typeof href === "string" && isSafeMarkdownUrl(href)
+                ? href
+                : undefined
+            const isLocal = safeHref?.startsWith("/") || safeHref?.startsWith("#")
+
+            return (
+              <a
+                {...props}
+                href={safeHref}
+                target={isLocal ? undefined : "_blank"}
+                rel={isLocal ? undefined : "noopener noreferrer"}
+                className={cn(
+                  "font-medium text-black underline decoration-black/25 underline-offset-4 transition-colors hover:text-black/80 hover:decoration-black/45 dark:text-white dark:decoration-white/25 dark:hover:text-white/80 dark:hover:decoration-white/45",
+                  className,
+                )}
+              >
+                {children}
+              </a>
+            )
+          },
+        }}
+      >
+        {normalizedContent}
+      </Streamdown>
+    </div>
   )
 }
 
@@ -294,6 +346,29 @@ function formatSkillCallName(name: string): string {
     .filter(Boolean)
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(" ")
+}
+
+function CaldirIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M19 21C19.5304 21 20.0391 20.7893 20.4142 20.4142C20.7893 20.0391 21 19.5304 21 19V7C21 6.46957 20.7893 5.96086 20.4142 5.58579C20.0391 5.21071 19.5303 5 19 5H13.1C12.7655 5.00328 12.4355 4.92261 12.1403 4.76538C11.8451 4.60815 11.594 4.37938 11.41 4.1L10.6 2.9C10.4179 2.62347 10.17 2.39648 9.8785 2.2394C9.58702 2.08231 9.26111 2.00005 8.93 2H5C4.46957 2 3.96086 2.21071 3.58579 2.58579C3.21071 2.96086 3 3.46957 3 4V19C3 19.5304 3.21071 20.0391 3.58579 20.4142C3.96086 20.7893 4.46957 21 5 21H19Z" />
+      <path d="M3 9H21" />
+      <path d="M8 13H8.01" />
+      <path d="M12 13H12.01" />
+      <path d="M16 13H16.01" />
+      <path d="M8 17H8.01" />
+      <path d="M12 17H12.01" />
+    </svg>
+  )
 }
 
 function DirectSkillCallMessage({
@@ -310,7 +385,7 @@ function DirectSkillCallMessage({
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 text-[0.95rem] leading-7">
       <span className="inline-flex min-w-0 items-center gap-2 font-medium text-[#2f80df] dark:text-[#72a8ff]">
-        <Box className="h-4 w-4 shrink-0" aria-hidden />
+        <CaldirIcon className="h-4 w-4 shrink-0" />
         <span className="truncate">
           {formatSkillCallName(message.skillCall.name)}
         </span>

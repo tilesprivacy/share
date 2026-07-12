@@ -130,6 +130,19 @@ body {
   color: inherit;
 }
 
+.share-markdown-frontmatter {
+  margin: 0;
+  border-radius: 0.375rem;
+  border: 1px solid rgb(0 0 0 / 0.08);
+  background: rgb(0 0 0 / 0.025);
+  padding: 0.625rem 0.75rem;
+}
+
+.dark .share-markdown-frontmatter {
+  border-color: rgb(255 255 255 / 0.1);
+  background: rgb(255 255 255 / 0.035);
+}
+
 .share-markdown :where(p, ul, ol, blockquote, pre, table) {
   margin: 0;
 }
