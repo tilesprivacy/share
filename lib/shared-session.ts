@@ -80,17 +80,21 @@ export function resolveSharedSessionUri(shareToken: string): string {
     .trim()
     .replace(/^\/+|\/+$/g, "")
     .replace(/\/api\/og$/i, "")
-  const normalizedToken = token.replace(/-/g, "+").replace(/_/g, "/")
-  const paddedToken = normalizedToken.padEnd(
-    normalizedToken.length + ((4 - (normalizedToken.length % 4)) % 4),
-    "=",
-  )
-  const decodedText = Buffer.from(paddedToken, "base64").toString("utf8").trim()
-  const decodedUri = decodedText.startsWith("at://")
-    ? decodedText
-    : `at://${decodedText.replace(/^\/+/, "")}`
+  const tokenCandidates = token.startsWith("XQ6Ly9")
+    ? [`Y${token}`, token]
+    : [token]
+  const decodedUri = tokenCandidates
+    .map((candidate) => {
+      const normalizedToken = candidate.replace(/-/g, "+").replace(/_/g, "/")
+      const paddedToken = normalizedToken.padEnd(
+        normalizedToken.length + ((4 - (normalizedToken.length % 4)) % 4),
+        "=",
+      )
+      return Buffer.from(paddedToken, "base64").toString("utf8").trim()
+    })
+    .find((candidate) => candidate.startsWith("at://"))
 
-  if (!decodedUri.startsWith("at://")) {
+  if (!decodedUri) {
     throw new Error("Shared session token must be a base64 AT URI.")
   }
 
@@ -172,6 +176,27 @@ function parseDirectSkillCall(content: string): SharedSessionSkillCall | null {
   return {
     name,
     params: content.slice(skillTagMatch[0].length).trim(),
+  }
+}
+
+function hasCaldirSkillMention(value: unknown): boolean {
+  return /\bcaldir\b/i.test(JSON.stringify(value) ?? "")
+}
+
+function attachReferencedSkillCall(
+  message: SharedSessionMessage,
+  hasCaldirMention: boolean,
+): SharedSessionMessage {
+  if (message.role !== "user" || message.skillCall || !hasCaldirMention) {
+    return message
+  }
+
+  return {
+    ...message,
+    skillCall: {
+      name: "caldir",
+      params: message.content,
+    },
   }
 }
 
@@ -379,6 +404,7 @@ function normalizeSessionSnapshotMessages(
     const turnRecord = readObject(turn)
     const rawMessages = turnRecord?.messages
     const model = readString(turnRecord?.model) ?? undefined
+    const hasCaldirMention = hasCaldirSkillMention(turn)
 
     if (!Array.isArray(rawMessages)) {
       return
@@ -402,7 +428,10 @@ function normalizeSessionSnapshotMessages(
       }
 
       if (rawRole === "user") {
-        const normalized = normalizeMessage("user", content, true)
+        const normalized = attachReferencedSkillCall(
+          normalizeMessage("user", content, true),
+          hasCaldirMention,
+        )
         messages.push(normalized)
         return
       }

@@ -4,6 +4,7 @@ import {
   AlertCircle,
   Box,
   Brain,
+  CalendarDays,
   Check,
   ChevronDown,
   Copy,
@@ -687,8 +688,86 @@ function parseToolResultContent(content: string): {
   }
 }
 
+interface CaldirEvent {
+  date: string
+  time: string
+  title: string
+  calendar: string | null
+}
+
+function parseCaldirEvents(output: string): CaldirEvent[] | null {
+  const lines = output
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .split("\n")
+    .map((line) => line.trimEnd())
+  const datePattern = /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+[A-Z][a-z]{2}\s+\d{1,2}$/
+  const eventPattern = /^\s+(all-day|\d{1,2}:\d{2})\s+(.+?)(?:\s+\[([^\]]+)\])?\s*$/
+  const events: CaldirEvent[] = []
+  let currentDate: string | null = null
+
+  for (const line of lines) {
+    const dateMatch = line.trim().match(datePattern)
+
+    if (dateMatch) {
+      currentDate = dateMatch[0]
+      continue
+    }
+
+    const eventMatch = line.match(eventPattern)
+
+    if (currentDate && eventMatch) {
+      events.push({
+        date: currentDate,
+        time: eventMatch[1],
+        title: eventMatch[2].trim(),
+        calendar: eventMatch[3]?.trim() ?? null,
+      })
+    }
+  }
+
+  return events.length > 0 ? events : null
+}
+
+function CaldirEventsSheet({ events }: { events: CaldirEvent[] }) {
+  return (
+    <div className="grid gap-3">
+      <div className="flex items-center gap-2 text-[0.82rem] font-medium text-black/65 dark:text-white/70">
+        <CalendarDays className="h-4 w-4 text-black/48 dark:text-white/48" aria-hidden />
+        <span>Caldir events</span>
+      </div>
+      <div className="grid gap-2">
+        {events.map((event, index) => (
+          <div
+            key={`${event.date}-${event.time}-${event.title}-${index}`}
+            className="grid min-w-0 gap-1 rounded-md border border-black/8 bg-white/55 px-3 py-2 dark:border-white/10 dark:bg-white/[0.035] sm:grid-cols-[7.5rem_minmax(0,1fr)] sm:items-start sm:gap-3"
+          >
+            <div className="text-[0.76rem] leading-5 text-black/48 dark:text-white/48">
+              <div>{event.date}</div>
+              <div className="font-mono">{event.time}</div>
+            </div>
+            <div className="min-w-0">
+              <div className="break-words text-[0.84rem] leading-5 text-black/75 dark:text-white/75">
+                {event.title}
+              </div>
+              {event.calendar ? (
+                <div className="mt-0.5 break-all text-[0.72rem] leading-5 text-black/42 dark:text-white/42">
+                  {event.calendar}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ToolResultCard({ content }: { content: string }) {
   const { toolName, output } = parseToolResultContent(content)
+  const caldirEvents =
+    toolName?.toLowerCase() === "bash" || toolName?.toLowerCase() === "shell"
+      ? parseCaldirEvents(output)
+      : null
   const normalizedToolName = toolName?.toLowerCase()
   const isLongOutput = output.length > 1800 || output.split("\n").length > 24
   const icon =
@@ -721,7 +800,11 @@ function ToolResultCard({ content }: { content: string }) {
                 : "",
             )}
           >
-            <MarkdownMessage content={output} />
+            {caldirEvents ? (
+              <CaldirEventsSheet events={caldirEvents} />
+            ) : (
+              <MarkdownMessage content={output} />
+            )}
           </div>
         </div>
       ) : null}
@@ -1091,10 +1174,18 @@ export function ShareSessionClient({
       return
     }
     const load = async () => {
-      const fragment = decodeURIComponent(window.location.hash.slice(1))
-      const sharedSession = await getSharedSession(shareToken, fragment)
+      try {
+        const fragment = decodeURIComponent(window.location.hash.slice(1))
+        const sharedSession = await getSharedSession(shareToken, fragment)
 
-      setSharedSession(sharedSession)
+        setSharedSession(sharedSession)
+      } catch (error: unknown) {
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : "Unable to load this shared session.",
+        )
+      }
     }
 
     load()
