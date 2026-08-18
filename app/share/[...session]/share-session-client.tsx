@@ -13,8 +13,15 @@ import {
   Wrench,
 } from "lucide-react"
 import Image from "next/image"
-import { createMathPlugin } from "@streamdown/math"
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import type { createMathPlugin } from "@streamdown/math"
+import {
+  createContext,
+  memo,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react"
 import { Streamdown } from "streamdown"
 import "katex/dist/katex.min.css"
 import { SharePageQrCode } from "@/components/share-page-qr-code"
@@ -27,9 +34,42 @@ import {
 import { TILES_APP_ORIGIN } from "@/lib/site-url"
 import { cn } from "@/lib/utils"
 
-const shareMathPlugin = createMathPlugin({
-  singleDollarTextMath: true,
-})
+type ShareMathPlugin = ReturnType<typeof createMathPlugin>
+
+// @streamdown/math eagerly imports all of KaTeX (~600KB), so it is only
+// loaded once a session that actually contains math arrives. The promise is
+// module-level so the plugin keeps a stable identity — Streamdown's memo
+// compares the plugins prop by reference and re-parses everything when it
+// changes.
+let mathPluginPromise: Promise<ShareMathPlugin | null> | null = null
+
+function loadShareMathPlugin(): Promise<ShareMathPlugin | null> {
+  mathPluginPromise ??= import("@streamdown/math")
+    .then((mod) =>
+      mod.createMathPlugin({
+        singleDollarTextMath: true,
+      }),
+    )
+    .catch(() => {
+      // Chunk failed to load (deploy rotated hashes, flaky network): math
+      // renders as raw TeX this time, and the next session retries the import.
+      mathPluginPromise = null
+      return null
+    })
+  return mathPluginPromise
+}
+
+// Matches $..$, \(..\), \[..\] before normalizeShareMathMarkdown rewrites the
+// latter two into dollar form.
+const MATH_HINT_PATTERN = /\$|\\\(|\\\[/
+
+function sessionHasMath(sharedSession: SharedSession): boolean {
+  return sharedSession.messages.some((message) =>
+    MATH_HINT_PATTERN.test(message.content),
+  )
+}
+
+const MathPluginContext = createContext<ShareMathPlugin | null>(null)
 
 interface ShareSessionClientProps {
   mockApiUrl?: string
@@ -299,12 +339,51 @@ function MarkdownFrontmatterBlock({
   )
 }
 
+function ShareMarkdownLink({
+  href,
+  children,
+  className,
+  node: _node,
+  ...props
+}: React.ComponentProps<"a"> & { node?: unknown }) {
+  const safeHref =
+    typeof href === "string" && isSafeMarkdownUrl(href) ? href : undefined
+  const isLocal = safeHref?.startsWith("/") || safeHref?.startsWith("#")
+
+  return (
+    <a
+      {...props}
+      href={safeHref}
+      target={isLocal ? undefined : "_blank"}
+      rel={isLocal ? undefined : "noopener noreferrer"}
+      className={cn(
+        "font-medium text-black underline decoration-black/25 underline-offset-4 transition-colors hover:text-black/80 hover:decoration-black/45 dark:text-white dark:decoration-white/25 dark:hover:text-white/80 dark:hover:decoration-white/45",
+        className,
+      )}
+    >
+      {children}
+    </a>
+  )
+}
+
+// Module-level so every Streamdown instance sees stable prop identities;
+// Streamdown mode="static" re-parses the full message when memoized props
+// change, so unstable references here would re-parse the whole transcript on
+// unrelated state changes.
+const shareMarkdownComponents = { a: ShareMarkdownLink }
+const shareMarkdownControls = { table: true, code: false, mermaid: false }
+
 function MarkdownMessage({ content }: { content: string }) {
+  const mathPlugin = useContext(MathPluginContext)
   const { entries, body } = useMemo(
     () => splitMarkdownFrontmatter(content.replace(/\r\n?/g, "\n")),
     [content],
   )
   const normalizedContent = useMemo(() => normalizeShareMathMarkdown(body), [body])
+  const plugins = useMemo(
+    () => (mathPlugin ? { math: mathPlugin } : undefined),
+    [mathPlugin],
+  )
 
   return (
     <div className="grid gap-3">
@@ -313,33 +392,10 @@ function MarkdownMessage({ content }: { content: string }) {
         mode="static"
         className="share-markdown break-words"
         urlTransform={transformShareMarkdownUrl}
-        plugins={{ math: shareMathPlugin }}
-        controls={{ table: true, code: false, mermaid: false }}
+        plugins={plugins}
+        controls={shareMarkdownControls}
         lineNumbers={false}
-        components={{
-          a: ({ href, children, className, node: _node, ...props }) => {
-            const safeHref =
-              typeof href === "string" && isSafeMarkdownUrl(href)
-                ? href
-                : undefined
-            const isLocal = safeHref?.startsWith("/") || safeHref?.startsWith("#")
-
-            return (
-              <a
-                {...props}
-                href={safeHref}
-                target={isLocal ? undefined : "_blank"}
-                rel={isLocal ? undefined : "noopener noreferrer"}
-                className={cn(
-                  "font-medium text-black underline decoration-black/25 underline-offset-4 transition-colors hover:text-black/80 hover:decoration-black/45 dark:text-white dark:decoration-white/25 dark:hover:text-white/80 dark:hover:decoration-white/45",
-                  className,
-                )}
-              >
-                {children}
-              </a>
-            )
-          },
-        }}
+        components={shareMarkdownComponents}
       >
         {normalizedContent}
       </Streamdown>
@@ -972,14 +1028,14 @@ function MessageMetaRow({
     return null
   }
 
-  const answerToCopy = splitReasoningContent(message.content).answer.trim()
-  const copyPayload = answerToCopy.length > 0 ? answerToCopy : message.content
-
   return (
     <div className="mt-3 flex items-center gap-2 text-[0.78rem] text-black/60 dark:text-white/65">
       <button
         type="button"
         onClick={() => {
+          const answerToCopy = splitReasoningContent(message.content).answer.trim()
+          const copyPayload =
+            answerToCopy.length > 0 ? answerToCopy : message.content
           void navigator.clipboard.writeText(copyPayload).then(() => {
             setCopied(true)
             window.setTimeout(() => setCopied(false), 1200)
@@ -1012,7 +1068,9 @@ function MessageMetaRow({
   )
 }
 
-function MessageBubble({
+// Memoized so parent state changes (theme, copied-link flashes, page URL
+// arriving) don't re-render — and therefore re-parse — the whole transcript.
+const MessageBubble = memo(function MessageBubble({
   message,
   modelLabel,
 }: {
@@ -1037,7 +1095,7 @@ function MessageBubble({
       </div>
     </div>
   )
-}
+})
 
 function EmptyState() {
   return (
@@ -1068,23 +1126,15 @@ function ErrorState({ message }: { message: string }) {
 
 function ShareFloatingDownloadBar({
   themePreference,
-  isDark,
   onSetThemePreference,
 }: {
   themePreference: ShareThemePreference
-  isDark: boolean
   onSetThemePreference: (nextTheme: ShareThemePreference) => void
 }) {
   return (
     <div className="share-floating-download-bar pointer-events-none fixed inset-x-0 bottom-[max(0.65rem,env(safe-area-inset-bottom,0px))] z-[60] px-3 print:hidden sm:bottom-4 sm:px-4">
       <div className="mx-auto w-full max-w-[38rem]">
-        <div
-          className={`pointer-events-auto flex min-w-0 items-center justify-between gap-2 rounded-[0.9rem] border px-2.5 py-1.5 shadow-[0_8px_20px_rgba(0,0,0,0.12)] backdrop-blur-sm sm:gap-3 sm:px-3 sm:py-2 ${
-            isDark
-              ? "border-white/10 bg-[#1f1f1f]/95"
-              : "border-black/10 bg-white/95"
-          }`}
-        >
+        <div className="pointer-events-auto flex min-w-0 items-center justify-between gap-2 rounded-[0.9rem] border border-black/10 bg-white/95 px-2.5 py-1.5 shadow-[0_8px_20px_rgba(0,0,0,0.12)] backdrop-blur-sm dark:border-white/10 dark:bg-[#1f1f1f]/95 sm:gap-3 sm:px-3 sm:py-2">
           <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
             <a
               href={TILES_APP_ORIGIN}
@@ -1095,29 +1145,17 @@ function ShareFloatingDownloadBar({
                 alt="Tiles"
                 width={40}
                 height={40}
-                className={`h-6 w-6 shrink-0 opacity-90 sm:h-7 sm:w-7 ${isDark ? "" : "invert"}`}
+                className="h-6 w-6 shrink-0 opacity-90 invert dark:invert-0 sm:h-7 sm:w-7"
               />
-              <span
-                className={`shrink-0 text-sm font-semibold leading-none tracking-[-0.01em] sm:text-base ${
-                  isDark ? "text-[#e7e7ed]" : "text-[#1d1d1f]"
-                }`}
-              >
+              <span className="shrink-0 text-sm font-semibold leading-none tracking-[-0.01em] text-[#1d1d1f] dark:text-[#e7e7ed] sm:text-base">
                 Tiles
               </span>
             </a>
             <span className="inline-flex min-w-0 items-baseline">
-              <span
-                className={`ml-0.5 hidden min-w-0 truncate text-xs leading-none min-[430px]:inline sm:hidden ${
-                  isDark ? "text-white/55" : "text-black/55"
-                }`}
-              >
+              <span className="ml-0.5 hidden min-w-0 truncate text-xs leading-none text-black/55 dark:text-white/55 min-[430px]:inline sm:hidden">
                 Own your AI
               </span>
-              <span
-                className={`ml-0.5 hidden text-xs leading-none sm:inline ${
-                  isDark ? "text-white/55" : "text-black/55"
-                }`}
-              >
+              <span className="ml-0.5 hidden text-xs leading-none text-black/55 dark:text-white/55 sm:inline">
                 Own your AI
               </span>
             </span>
@@ -1134,11 +1172,7 @@ function ShareFloatingDownloadBar({
                       : "light",
                 )
               }
-              className={`inline-flex h-8 w-8 items-center justify-center rounded-[0.65rem] transition-colors ${
-                isDark
-                  ? "text-[#e7e7ed]/90 hover:text-[#e7e7ed]"
-                  : "text-[#1d1d1f]/85 hover:text-[#1d1d1f]"
-              }`}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[0.65rem] text-[#1d1d1f]/85 transition-colors hover:text-[#1d1d1f] dark:text-[#e7e7ed]/90 dark:hover:text-[#e7e7ed]"
               aria-label={`Theme: ${themePreference}. Click to switch theme`}
               title={`Theme: ${themePreference}`}
             >
@@ -1184,11 +1218,7 @@ function ShareFloatingDownloadBar({
             </button>
             <a
               href={`${TILES_APP_ORIGIN}/download`}
-              className={`inline-flex h-8 items-center justify-center rounded-[0.65rem] border px-2.5 text-xs font-medium transition-colors sm:px-3.5 sm:text-sm ${
-                isDark
-                  ? "border-white/10 bg-white/[0.035] text-[#e7e7ed]/90 hover:bg-white/[0.08] hover:text-[#e7e7ed]"
-                  : "border-black/10 bg-black/[0.03] text-[#1d1d1f]/85 hover:bg-black/[0.06] hover:text-[#1d1d1f]"
-              }`}
+              className="inline-flex h-8 items-center justify-center rounded-[0.65rem] border border-black/10 bg-black/[0.03] px-2.5 text-xs font-medium text-[#1d1d1f]/85 transition-colors hover:bg-black/[0.06] hover:text-[#1d1d1f] dark:border-white/10 dark:bg-white/[0.035] dark:text-[#e7e7ed]/90 dark:hover:bg-white/[0.08] dark:hover:text-[#e7e7ed] sm:px-3.5 sm:text-sm"
             >
               Download
             </a>
@@ -1196,6 +1226,34 @@ function ShareFloatingDownloadBar({
         </div>
       </div>
     </div>
+  )
+}
+
+function CopyLinkButton({ pageUrl }: { pageUrl: string }) {
+  const [copiedLink, setCopiedLink] = useState(false)
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (!pageUrl) {
+          return
+        }
+        void navigator.clipboard.writeText(pageUrl).then(() => {
+          setCopiedLink(true)
+          window.setTimeout(() => setCopiedLink(false), 1200)
+        })
+      }}
+      className="inline-flex h-5 w-5 items-center justify-center rounded-sm text-black/62 transition-colors hover:text-black dark:text-white/62 dark:hover:text-white"
+      aria-label="Copy link"
+      title="Copy link"
+    >
+      {copiedLink ? (
+        <Check className="h-3.5 w-3.5" aria-hidden />
+      ) : (
+        <Copy className="h-3.5 w-3.5" aria-hidden />
+      )}
+    </button>
   )
 }
 
@@ -1212,12 +1270,11 @@ export function ShareSessionClient({
     initialErrorMessage,
   )
   const [pageUrl, setPageUrl] = useState<string>("")
-  const [copiedLink, setCopiedLink] = useState(false)
+  // null = the stored preference has not been read yet; the root class set by
+  // the inline script in the layout is left untouched until then.
   const [themePreference, setThemePreference] =
-    useState<ShareThemePreference>("system")
-  const [isDark, setIsDark] = useState(false)
-  const [themeReady, setThemeReady] = useState(false)
-  const hadDarkBeforeMountRef = useRef<boolean | null>(null)
+    useState<ShareThemePreference | null>(null)
+  const [mathPlugin, setMathPlugin] = useState<ShareMathPlugin | null>(null)
 
   useEffect(() => {
     if (!mockApiUrl) {
@@ -1252,67 +1309,60 @@ export function ShareSessionClient({
   }, [mockApiUrl])
 
   useEffect(() => {
-    if (typeof window === "undefined" || mockApiUrl || !shareToken) {
+    if (mockApiUrl || !shareToken) {
       return
     }
+    let cancelled = false
     const load = async () => {
       try {
         const fragment = decodeURIComponent(window.location.hash.slice(1))
         const sharedSession = await getSharedSession(shareToken, fragment)
 
-        setSharedSession(sharedSession)
+        if (!cancelled) {
+          setSharedSession(sharedSession)
+        }
       } catch (error: unknown) {
-        setErrorMessage(
-          error instanceof Error
-            ? error.message
-            : "Unable to load this shared session.",
-        )
+        if (!cancelled) {
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to load this shared session.",
+          )
+        }
       }
     }
 
-    load()
+    void load()
+
+    return () => {
+      cancelled = true
+    }
   }, [mockApiUrl, shareToken])
 
   useEffect(() => {
-    if (typeof window === "undefined") {
+    if (!sharedSession || mathPlugin || !sessionHasMath(sharedSession)) {
       return
     }
+    let cancelled = false
 
-    setPageUrl(window.location.href)
-  }, [])
-
-  useLayoutEffect(() => {
-    if (typeof window === "undefined" || typeof document === "undefined") {
-      return
-    }
-
-    const root = document.documentElement
-    hadDarkBeforeMountRef.current = root.classList.contains("dark")
-
-    const parsedTheme = readStoredShareTheme()
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)")
-    const shouldUseDark =
-      parsedTheme === "system" ? mediaQuery.matches : parsedTheme === "dark"
-
-    setThemePreference(parsedTheme)
-    setIsDark(shouldUseDark)
-    root.classList.toggle("dark", shouldUseDark)
-    setThemeReady(true)
+    void loadShareMathPlugin().then((plugin) => {
+      if (!cancelled && plugin) {
+        setMathPlugin(plugin)
+      }
+    })
 
     return () => {
-      if (hadDarkBeforeMountRef.current === null) {
-        return
-      }
-      root.classList.toggle("dark", hadDarkBeforeMountRef.current)
+      cancelled = true
     }
+  }, [sharedSession, mathPlugin])
+
+  useEffect(() => {
+    setPageUrl(window.location.href)
+    setThemePreference(readStoredShareTheme())
   }, [])
 
   useEffect(() => {
-    if (
-      !themeReady ||
-      typeof window === "undefined" ||
-      typeof document === "undefined"
-    ) {
+    if (themePreference === null) {
       return
     }
 
@@ -1322,7 +1372,6 @@ export function ShareSessionClient({
         ? mediaQuery.matches
         : themePreference === "dark"
 
-    setIsDark(shouldUseDark)
     document.documentElement.classList.toggle("dark", shouldUseDark)
     writeStoredShareTheme(themePreference)
 
@@ -1331,7 +1380,6 @@ export function ShareSessionClient({
     }
 
     const handleSystemThemeChange = (event: MediaQueryListEvent) => {
-      setIsDark(event.matches)
       document.documentElement.classList.toggle("dark", event.matches)
     }
 
@@ -1339,7 +1387,7 @@ export function ShareSessionClient({
     return () => {
       mediaQuery.removeEventListener("change", handleSystemThemeChange)
     }
-  }, [themePreference, themeReady])
+  }, [themePreference])
 
   const sharedByLabel = useMemo(
     () => (sharedSession ? getSharedByLabel(sharedSession) : ""),
@@ -1367,25 +1415,17 @@ export function ShareSessionClient({
     )
   }, [sharedSession])
 
-  if (!themeReady) {
-    return (
-      <main
-        data-shared-session-page
-        className="flex h-[100dvh] bg-[#fbfbfd] text-[#1d1d1f]"
-      />
-    )
-  }
+  const activeThemePreference = themePreference ?? "system"
 
   if (errorMessage) {
     return (
       <main
         data-shared-session-page
-        className={`${isDark ? "dark bg-[#1f1f1f] text-[#E6E6E8]" : "bg-[#fbfbfd] text-[#1d1d1f]"} flex h-[100dvh] overflow-hidden pb-[max(1rem,env(safe-area-inset-bottom,0px))] pt-[calc(1rem+env(safe-area-inset-top,0px))] print:h-auto print:overflow-visible lg:min-h-screen lg:overflow-visible lg:pt-[calc(1.25rem+env(safe-area-inset-top,0px))]`}
+        className="flex h-[100dvh] overflow-hidden bg-[#fbfbfd] pb-[max(1rem,env(safe-area-inset-bottom,0px))] pt-[calc(1rem+env(safe-area-inset-top,0px))] text-[#1d1d1f] dark:bg-[#1f1f1f] dark:text-[#E6E6E8] print:h-auto print:overflow-visible lg:min-h-screen lg:overflow-visible lg:pt-[calc(1.25rem+env(safe-area-inset-top,0px))]"
       >
         <ErrorState message={errorMessage} />
         <ShareFloatingDownloadBar
-          themePreference={themePreference}
-          isDark={isDark}
+          themePreference={activeThemePreference}
           onSetThemePreference={setThemePreference}
         />
       </main>
@@ -1396,7 +1436,7 @@ export function ShareSessionClient({
     return (
       <main
         data-shared-session-page
-        className={`${isDark ? "dark bg-[#1f1f1f] text-[#E6E6E8]" : "bg-[#fbfbfd] text-[#1d1d1f]"} flex h-[100dvh] overflow-hidden px-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))] pt-[calc(1rem+env(safe-area-inset-top,0px))] print:h-auto print:overflow-visible sm:px-6 lg:px-8 lg:pt-[calc(1.25rem+env(safe-area-inset-top,0px))]`}
+        className="flex h-[100dvh] overflow-hidden bg-[#fbfbfd] px-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))] pt-[calc(1rem+env(safe-area-inset-top,0px))] text-[#1d1d1f] dark:bg-[#1f1f1f] dark:text-[#E6E6E8] print:h-auto print:overflow-visible sm:px-6 lg:px-8 lg:pt-[calc(1.25rem+env(safe-area-inset-top,0px))]"
       >
         <section className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col">
           <div className="flex min-h-0 flex-1 items-center justify-center">
@@ -1408,8 +1448,7 @@ export function ShareSessionClient({
           </div>
         </section>
         <ShareFloatingDownloadBar
-          themePreference={themePreference}
-          isDark={isDark}
+          themePreference={activeThemePreference}
           onSetThemePreference={setThemePreference}
         />
       </main>
@@ -1419,7 +1458,7 @@ export function ShareSessionClient({
   return (
     <main
       data-shared-session-page
-      className={`${isDark ? "dark bg-[#1f1f1f] text-[#E6E6E8]" : "bg-[#fbfbfd] text-[#1d1d1f]"} flex h-[100dvh] overflow-hidden px-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))] pt-[calc(1rem+env(safe-area-inset-top,0px))] print:h-auto print:overflow-visible print:pb-0 sm:px-6 lg:px-8 lg:pt-[calc(1.25rem+env(safe-area-inset-top,0px))]`}
+      className="flex h-[100dvh] overflow-hidden bg-[#fbfbfd] px-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))] pt-[calc(1rem+env(safe-area-inset-top,0px))] text-[#1d1d1f] dark:bg-[#1f1f1f] dark:text-[#E6E6E8] print:h-auto print:overflow-visible print:pb-0 sm:px-6 lg:px-8 lg:pt-[calc(1.25rem+env(safe-area-inset-top,0px))]"
     >
       <section className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col overflow-hidden">
         <div className="native-scrollbar min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] [scrollbar-gutter:stable] print:overflow-visible print:pb-4">
@@ -1427,7 +1466,6 @@ export function ShareSessionClient({
             <header className="relative flex flex-col gap-3 px-4 pb-7 pt-4 pr-[5.75rem] print:flex-row print:flex-nowrap print:items-start print:justify-between print:gap-x-6 print:px-2 print:pr-2 sm:px-5 sm:pb-8 sm:pr-[6.25rem] sm:pt-4">
               <SharePageQrCode
                 url={pageUrl}
-                isDark={isDark}
                 size={80}
                 className="absolute right-0 top-0 print:static print:float-right"
               />
@@ -1441,27 +1479,7 @@ export function ShareSessionClient({
                 <span className="shrink-0 rounded-sm border border-black/12 px-1.5 py-0.5 text-[0.65rem] font-medium leading-4 text-black/66 dark:border-white/16 dark:text-white/72">
                   {sharedSession.isPrivateLink ? "Private link" : "Public link"}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!pageUrl) {
-                      return
-                    }
-                    void navigator.clipboard.writeText(pageUrl).then(() => {
-                      setCopiedLink(true)
-                      window.setTimeout(() => setCopiedLink(false), 1200)
-                    })
-                  }}
-                  className="inline-flex h-5 w-5 items-center justify-center rounded-sm text-black/62 transition-colors hover:text-black dark:text-white/62 dark:hover:text-white"
-                  aria-label="Copy link"
-                  title="Copy link"
-                >
-                  {copiedLink ? (
-                    <Check className="h-3.5 w-3.5" aria-hidden />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5" aria-hidden />
-                  )}
-                </button>
+                <CopyLinkButton pageUrl={pageUrl} />
                 <button
                   type="button"
                   onClick={() =>
@@ -1513,17 +1531,19 @@ export function ShareSessionClient({
             </header>
 
             {sharedSession.messages.length > 0 ? (
-              <div className="flex min-w-0 flex-col gap-6 py-5 sm:gap-7 sm:py-3">
-                {sharedSession.messages.map((message, index) => (
-                  <MessageBubble
-                    key={`${message.role}-${index}`}
-                    message={message}
-                    modelLabel={
-                      message.model ?? sharedSession.modelsUsed[0] ?? null
-                    }
-                  />
-                ))}
-              </div>
+              <MathPluginContext.Provider value={mathPlugin}>
+                <div className="flex min-w-0 flex-col gap-6 py-5 sm:gap-7 sm:py-3">
+                  {sharedSession.messages.map((message, index) => (
+                    <MessageBubble
+                      key={`${message.role}-${index}`}
+                      message={message}
+                      modelLabel={
+                        message.model ?? sharedSession.modelsUsed[0] ?? null
+                      }
+                    />
+                  ))}
+                </div>
+              </MathPluginContext.Provider>
             ) : (
               <EmptyState />
             )}
@@ -1567,8 +1587,7 @@ export function ShareSessionClient({
         </div>
       </section>
       <ShareFloatingDownloadBar
-        themePreference={themePreference}
-        isDark={isDark}
+        themePreference={activeThemePreference}
         onSetThemePreference={setThemePreference}
       />
     </main>

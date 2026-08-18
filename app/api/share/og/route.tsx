@@ -63,10 +63,14 @@ export async function GET(request: Request) {
   let avatarDataUrl: string | null = null
   let isPrivateLink = false
   let shareVisibilityText = "Public"
-  const logoDataUrl = await toDataUrl(`${url.origin}/icon-mark-light.svg`)
+  const [logoDataUrl, atData] = await Promise.all([
+    toDataUrl(`${url.origin}/icon-mark-light.svg`),
+    getAtprotoData(shareToken, { signal: AbortSignal.timeout(5_000) }).catch(
+      () => null,
+    ),
+  ])
 
-  try {
-    const atData = await getAtprotoData(shareToken)
+  if (atData) {
     isPrivateLink = isEncryptedSharedSessionRecord(atData.record)
     shareVisibilityText = isPrivateLink ? "Private" : "Public"
     const handle = atData.sharedBy.handle?.trim()
@@ -78,11 +82,6 @@ export async function GET(request: Request) {
     avatarDataUrl = atData.sharedBy.avatarUrl
       ? await toDataUrl(atData.sharedBy.avatarUrl)
       : null
-  } catch {
-    handleText = "@unknown"
-    avatarDataUrl = null
-    isPrivateLink = false
-    shareVisibilityText = "Public"
   }
 
   return new ImageResponse(

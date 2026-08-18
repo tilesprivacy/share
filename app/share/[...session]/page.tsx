@@ -43,7 +43,11 @@ export async function generateMetadata({
   let description = DEFAULT_SHARED_SESSION_DESCRIPTION
 
   try {
-    const at_data = await getAtprotoData(shareToken)
+    // Metadata streams for browsers, so this fetch only delays HTML-limited
+    // bots (link unfurlers); the timeout keeps a slow PDS from hanging them.
+    const at_data = await getAtprotoData(shareToken, {
+      signal: AbortSignal.timeout(5_000),
+    })
     const isPrivateLink = isEncryptedSharedSessionRecord(at_data.record)
     title = getSharedSessionTitle(at_data.sharedBy.handle, isPrivateLink)
     description = getSharedSessionDescription(isPrivateLink)
@@ -83,13 +87,14 @@ export default async function SharePage({ params }: SharePageProps) {
   const { session } = await params
   const shareToken = session.join("/")
 
-  try {
-    return <ShareSessionClient shareToken={shareToken} />
-  } catch (error) {
-    const errorMessage =
-      error instanceof Error
-        ? error.message
-        : "Unable to load this shared session."
-    return <ShareSessionClient initialErrorMessage={errorMessage} />
-  }
+  return (
+    <>
+      {/* Hoisted into <head> so the browser warms up the hosts the
+          client-side PDS fetch waterfall hits, before any JS runs. */}
+      <link rel="preconnect" href="https://plc.directory" />
+      <link rel="preconnect" href="https://public.api.bsky.app" />
+      <link rel="dns-prefetch" href="https://cdn.bsky.app" />
+      <ShareSessionClient shareToken={shareToken} />
+    </>
+  )
 }

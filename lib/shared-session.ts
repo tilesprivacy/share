@@ -1,5 +1,3 @@
-import { AtpAgent } from "@atproto/api"
-import sodium from "libsodium-wrappers"
 export type SharedSessionMessageRole = "user" | "assistant"
 
 export interface SharedSessionSkillCall {
@@ -54,6 +52,23 @@ const TILES_SHARED_SESSION_COLLECTIONS = new Set([
 const DEFAULT_TILES_SESSION_REPO =
   process.env.TILES_DEFAULT_SHARE_REPO ?? "did:plc:mbk6wgmxiatotzy5b3q57naw"
 
+// btoa/atob operate on byte strings, so UTF-8 encode around them. Used instead
+// of Buffer so the client bundle doesn't need the Buffer polyfill.
+function base64EncodeUtf8(value: string): string {
+  const bytes = new TextEncoder().encode(value)
+  let binary = ""
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+  return btoa(binary)
+}
+
+function base64DecodeUtf8(value: string): string {
+  const binary = atob(value)
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+  return new TextDecoder().decode(bytes)
+}
+
 export function createSharedSessionPathFromUri(uri: string): string {
   const { repo, collection } = parseAtUri(uri)
 
@@ -66,8 +81,7 @@ export function createSharedSessionPathFromUri(uri: string): string {
     )
   }
 
-  const base64UrlToken = Buffer.from(uri, "utf8")
-    .toString("base64")
+  const base64UrlToken = base64EncodeUtf8(uri)
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/g, "")
@@ -85,12 +99,26 @@ export function resolveSharedSessionUri(shareToken: string): string {
     : [token]
   const decodedUri = tokenCandidates
     .map((candidate) => {
-      const normalizedToken = candidate.replace(/-/g, "+").replace(/_/g, "/")
+      // Strip anything outside the base64 alphabet (whitespace, stray
+      // percent-decoded bytes) the way Buffer's forgiving decoder did.
+      const strippedToken = candidate
+        .replace(/-/g, "+")
+        .replace(/_/g, "/")
+        .replace(/[^A-Za-z0-9+/]/g, "")
+      // A dangling char can't carry a full byte; forgiving decoders drop it.
+      const normalizedToken =
+        strippedToken.length % 4 === 1
+          ? strippedToken.slice(0, -1)
+          : strippedToken
       const paddedToken = normalizedToken.padEnd(
         normalizedToken.length + ((4 - (normalizedToken.length % 4)) % 4),
         "=",
       )
-      return Buffer.from(paddedToken, "base64").toString("utf8").trim()
+      try {
+        return base64DecodeUtf8(paddedToken).trim()
+      } catch {
+        return ""
+      }
     })
     .find((candidate) => candidate.startsWith("at://"))
 
@@ -138,14 +166,20 @@ function normalizeModelsUsed(value: unknown): string[] {
   })
 }
 
-function noStoreFetch(
-  input: Parameters<typeof fetch>[0],
-  init?: Parameters<typeof fetch>[1],
-) {
-  return fetch(input, {
-    ...init,
-    cache: "no-store",
-  })
+interface AtprotoFetchOptions {
+  signal?: AbortSignal
+}
+
+async function readXrpcErrorMessage(
+  response: Response,
+  fallback: string,
+): Promise<string> {
+  try {
+    const body = (await response.json()) as { message?: unknown }
+    return readString(body.message) ?? fallback
+  } catch {
+    return fallback
+  }
 }
 
 function decodeXmlAttribute(value: string): string {
@@ -562,44 +596,65 @@ function normalizeSharedSessionPayload(
   }
 }
 
-async function getRecord(uri: string): Promise<Record<string, unknown>> {
+// Plain XRPC GETs instead of @atproto/api: importing AtpAgent pulls every
+// generated lexicon (~2.9MB of runtime JS) into the client bundle for what are
+// two unauthenticated query endpoints.
+async function getRecord(
+  uri: string,
+  options?: AtprotoFetchOptions,
+): Promise<Record<string, unknown>> {
   const { repo, collection, rkey } = parseAtUri(uri)
-  const service = await resolveAtprotoService(repo)
-  const agent = new AtpAgent({
-    service,
-    fetch: noStoreFetch,
+  const service = await resolveAtprotoService(repo, options)
+  const url = new URL("/xrpc/com.atproto.repo.getRecord", service)
+  url.searchParams.set("repo", repo)
+  url.searchParams.set("collection", collection)
+  url.searchParams.set("rkey", rkey)
+
+  // The record itself is always fetched fresh so deletions and edits on the
+  // PDS are respected.
+  const response = await fetch(url, {
+    cache: "no-store",
+    signal: options?.signal,
   })
 
-  const response = await agent.com.atproto.repo.getRecord({
-    repo,
-    collection,
-    rkey,
-  })
-  const body = response.data
+  if (!response.ok) {
+    throw new Error(
+      await readXrpcErrorMessage(
+        response,
+        `Unable to load shared session record (${response.status}).`,
+      ),
+    )
+  }
 
-  if (!body.value || typeof body.value !== "object") {
+  const body = (await response
+    .json()
+    .catch(() => null)) as { value?: unknown } | null
+
+  if (!body?.value || typeof body.value !== "object") {
     throw new Error("Shared session record did not contain a JSON value.")
   }
 
   return body.value as Record<string, unknown>
 }
 
-async function getActorProfile(repo: string): Promise<{
-  did: string
-  handle: string | null
-  displayName: string | null
-  avatarUrl: string | null
-}> {
-  const agent = new AtpAgent({
-    service: DEFAULT_ATPROTO_SERVICE,
-    fetch: noStoreFetch,
-  })
-
+async function getActorProfile(
+  repo: string,
+  options?: AtprotoFetchOptions,
+): Promise<SharedSession["sharedBy"]> {
   try {
-    const response = await agent.app.bsky.actor.getProfile({
-      actor: repo,
-    })
-    const profile = response.data
+    const url = new URL(
+      "/xrpc/app.bsky.actor.getProfile",
+      DEFAULT_ATPROTO_SERVICE,
+    )
+    url.searchParams.set("actor", repo)
+
+    const response = await fetch(url, { signal: options?.signal })
+
+    if (!response.ok) {
+      throw new Error(`Unable to load profile (${response.status}).`)
+    }
+
+    const profile = (await response.json()) as Record<string, unknown>
 
     return {
       did: readString(profile.did) ?? repo,
@@ -608,6 +663,8 @@ async function getActorProfile(repo: string): Promise<{
       avatarUrl: readString(profile.avatar),
     }
   } catch {
+    // The profile is decoration; never let its failure (including a timeout
+    // on the shared signal) discard a successfully fetched record.
     return {
       did: repo,
       handle: null,
@@ -617,7 +674,10 @@ async function getActorProfile(repo: string): Promise<{
   }
 }
 
-async function resolveAtprotoService(repo: string): Promise<string> {
+async function resolveAtprotoService(
+  repo: string,
+  options?: AtprotoFetchOptions,
+): Promise<string> {
   const configured = process.env.ATPROTO_PUBLIC_SERVICE_URL?.trim()
 
   if (configured) {
@@ -628,12 +688,13 @@ async function resolveAtprotoService(repo: string): Promise<string> {
     return DEFAULT_ATPROTO_SERVICE
   }
 
-  const response = await noStoreFetch(
+  const response = await fetch(
     `${PLC_DIRECTORY_URL}/${encodeURIComponent(repo)}`,
     {
       headers: {
         accept: "application/json",
       },
+      signal: options?.signal,
     },
   )
 
@@ -643,7 +704,7 @@ async function resolveAtprotoService(repo: string): Promise<string> {
     )
   }
 
-  const didDocument = (await response.json()) as {
+  const didDocument = (await response.json().catch(() => ({}))) as {
     service?: Array<{
       id?: unknown
       type?: unknown
@@ -664,13 +725,25 @@ async function resolveAtprotoService(repo: string): Promise<string> {
   return endpoint.replace(/\/$/, "")
 }
 
+export interface AtprotoShareData {
+  sourceUri: string
+  repo: string
+  record: Record<string, unknown>
+  sharedBy: SharedSession["sharedBy"]
+}
+
 export async function getAtprotoData(
   sharePath: string,
-): Promise<Record<string, any>> {
+  options?: AtprotoFetchOptions,
+): Promise<AtprotoShareData> {
   const sourceUri = resolveSharedSessionUri(sharePath)
   const { repo } = parseAtUri(sourceUri)
-  const record = await getRecord(sourceUri)
-  const sharedBy = await getActorProfile(repo)
+  // The profile lookup is independent of PDS resolution + record retrieval, so
+  // run both branches concurrently instead of as a 3-hop waterfall.
+  const [record, sharedBy] = await Promise.all([
+    getRecord(sourceUri, options),
+    getActorProfile(repo, options),
+  ])
 
   return {
     sourceUri,
@@ -679,46 +752,58 @@ export async function getAtprotoData(
     sharedBy,
   }
 }
+
 export async function getSharedSession(
   sharePath: string,
   fragment: string | null,
 ): Promise<SharedSession> {
+  // Private links carry the key material in the URL fragment. Warm up the
+  // (lazy-loaded) sodium module while the record downloads; public links never
+  // pay for it.
+  const sodiumPromise = fragment ? import("libsodium-wrappers") : null
+  // If the record turns out not to be encrypted (or its fetch fails), the
+  // warm-up is never awaited — keep its rejection from surfacing as an
+  // unhandled one.
+  sodiumPromise?.catch(() => {})
   const at_data = await getAtprotoData(sharePath)
   const record = at_data.record
   const isPrivateLink = isEncryptedSharedSessionRecord(record)
-  if (isPrivateLink) {
-    console.log("This is an encrypted session")
-    if (fragment != null) {
-      let fragments = fragment?.split(".")
-      let nonce_bytes = sodium.from_base64(
-        fragments[0],
-        sodium.base64_variants.ORIGINAL,
-      )
-      let key_bytes = sodium.from_base64(
-        fragments[1],
-        sodium.base64_variants.ORIGINAL,
-      )
-      //@ts-ignore
-      let ciphertxt = sodium.from_base64(
-        record["enc_content"],
-        sodium.base64_variants.ORIGINAL,
-      )
-      const additional_data = null
-      const decrypted_data = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
-        null,
-        ciphertxt,
-        additional_data,
-        nonce_bytes,
-        key_bytes,
-      )
-      const text = new TextDecoder().decode(decrypted_data)
-      const obj = JSON.parse(text)
-      return normalizeSharedSessionPayload(obj, {
-        isPrivateLink,
-        sourceUri: at_data.sourceUri,
-        sharedBy: at_data.sharedBy,
-      })
-    }
+  if (isPrivateLink && !fragment) {
+    throw new Error(
+      "This is a private link, but its decryption key is missing from the URL. Ask for the full link, including the part after #.",
+    )
+  }
+  if (isPrivateLink && fragment) {
+    const sodium = (await sodiumPromise!).default
+    await sodium.ready
+    const fragments = fragment.split(".")
+    const nonce_bytes = sodium.from_base64(
+      fragments[0],
+      sodium.base64_variants.ORIGINAL,
+    )
+    const key_bytes = sodium.from_base64(
+      fragments[1],
+      sodium.base64_variants.ORIGINAL,
+    )
+    const ciphertxt = sodium.from_base64(
+      record.enc_content as string,
+      sodium.base64_variants.ORIGINAL,
+    )
+    const additional_data = null
+    const decrypted_data = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
+      null,
+      ciphertxt,
+      additional_data,
+      nonce_bytes,
+      key_bytes,
+    )
+    const text = new TextDecoder().decode(decrypted_data)
+    const obj = JSON.parse(text)
+    return normalizeSharedSessionPayload(obj, {
+      isPrivateLink,
+      sourceUri: at_data.sourceUri,
+      sharedBy: at_data.sharedBy,
+    })
   }
 
   return normalizeSharedSessionPayload(record, {
