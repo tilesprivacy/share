@@ -145,7 +145,14 @@ function buildBlueskyProfileUrl(handle: string | null, did: string): string {
 }
 
 function buildHuggingFaceModelUrl(modelId: string): string {
-  return `https://huggingface.co/${encodeURIComponent(modelId).replace(/%2F/g, "/")}`
+  // Drop the ollama-style quantization tag (e.g. ":Q4_K_M") — it is not part
+  // of the Hugging Face repo id.
+  const repoId = modelId.split(":")[0]
+
+  return `https://huggingface.co/${repoId
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")}`
 }
 
 function isSafeMarkdownUrl(url: string): boolean {

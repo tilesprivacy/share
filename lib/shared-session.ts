@@ -306,13 +306,20 @@ function formatSessionSnapshotToolCall(
   )}`
 }
 
-function readSessionSnapshotMessageContent(
-  role: string | null,
+interface SessionSnapshotMessageParts {
+  reasoning: string
+  visible: string
+}
+
+function readSessionSnapshotMessageParts(
   content: unknown,
-): string {
+): SessionSnapshotMessageParts {
   if (!Array.isArray(content)) {
     const text = readString(content)
-    return text ? stripAnswerLabel(text) : ""
+    return {
+      reasoning: "",
+      visible: text ? stripAnswerLabel(text) : "",
+    }
   }
 
   const reasoningItems: string[] = []
@@ -363,32 +370,33 @@ function readSessionSnapshotMessageContent(
     }
   })
 
-  const reasoningContent = reasoningItems.join("\n\n").trim()
-  const visibleContent = visibleItems.join("\n\n").trim()
-
-  if (role === "assistant" && reasoningContent && visibleContent) {
-    return `${reasoningContent}\n\n**[Answer]**\n\n${visibleContent}`
+  return {
+    reasoning: reasoningItems.join("\n\n").trim(),
+    visible: visibleItems.join("\n\n").trim(),
   }
-
-  return [reasoningContent, visibleContent].filter(Boolean).join("\n\n")
 }
 
-function appendSnapshotMessage(
-  messages: SharedSessionMessage[],
-  message: SharedSessionMessage,
-): void {
-  const previous = messages[messages.length - 1]
+interface PendingAssistantMessage {
+  reasoningParts: string[]
+  answerParts: string[]
+  model?: string
+}
 
-  if (previous?.role === "assistant" && message.role === "assistant") {
-    previous.content = [previous.content, message.content]
-      .map((entry) => entry.trim())
-      .filter(Boolean)
-      .join("\n\n")
-    previous.model = previous.model ?? message.model
-    return
+function buildAssistantSnapshotContent(
+  pending: PendingAssistantMessage,
+): string {
+  let reasoning = pending.reasoningParts.join("\n\n").trim()
+  const answer = pending.answerParts.join("\n\n").trim()
+
+  if (reasoning && !/^\*\*\[Reasoning\]\*\*/.test(reasoning)) {
+    reasoning = `**[Reasoning]**\n\n${reasoning}`
   }
 
-  messages.push(message)
+  if (reasoning && answer) {
+    return `${reasoning}\n\n**[Answer]**\n\n${answer}`
+  }
+
+  return reasoning || answer
 }
 
 function normalizeSessionSnapshotMessages(
@@ -399,6 +407,30 @@ function normalizeSessionSnapshotMessages(
   }
 
   const messages: SharedSessionMessage[] = []
+  let pending: PendingAssistantMessage | null = null
+
+  const flushPending = () => {
+    if (!pending) {
+      return
+    }
+
+    const content = buildAssistantSnapshotContent(pending)
+
+    if (content) {
+      messages.push({
+        ...normalizeMessage("assistant", content, false),
+        model: pending.model,
+      })
+    }
+
+    pending = null
+  }
+
+  const ensurePending = (model: string | undefined) => {
+    pending ??= { reasoningParts: [], answerParts: [] }
+    pending.model = pending.model ?? model
+    return pending
+  }
 
   turns.forEach((turn) => {
     const turnRecord = readObject(turn)
@@ -418,16 +450,19 @@ function normalizeSessionSnapshotMessages(
       }
 
       const rawRole = readString(messageRecord.role)
-      const content = readSessionSnapshotMessageContent(
-        rawRole,
-        messageRecord.content,
-      ).trim()
-
-      if (!content) {
-        return
-      }
+      const parts = readSessionSnapshotMessageParts(messageRecord.content)
 
       if (rawRole === "user") {
+        const content = [parts.reasoning, parts.visible]
+          .filter(Boolean)
+          .join("\n\n")
+          .trim()
+
+        if (!content) {
+          return
+        }
+
+        flushPending()
         const normalized = attachReferencedSkillCall(
           normalizeMessage("user", content, true),
           hasCaldirMention,
@@ -437,31 +472,44 @@ function normalizeSessionSnapshotMessages(
       }
 
       if (rawRole === "assistant") {
-        appendSnapshotMessage(messages, {
-          ...normalizeMessage("assistant", content, false),
-          model,
-        })
+        if (!parts.reasoning && !parts.visible) {
+          return
+        }
+
+        const target = ensurePending(model)
+
+        if (parts.reasoning) {
+          target.reasoningParts.push(parts.reasoning)
+        }
+
+        if (parts.visible) {
+          target.answerParts.push(parts.visible)
+        }
+
         return
       }
 
       if (rawRole === "toolResult") {
+        const content = parts.visible || parts.reasoning
+
+        if (!content) {
+          return
+        }
+
         const toolName = readString(messageRecord.toolName)
         const toolResultContent = toolName
           ? `Tool: ${toolName}\n\n${content}`
           : content
 
-        appendSnapshotMessage(messages, {
-          ...normalizeMessage(
-            "assistant",
-            `**[Reasoning]**\n\n**[ToolResult]**\n${toolResultContent}`,
-            false,
-          ),
-          model,
-        })
+        ensurePending(model).reasoningParts.push(
+          `**[ToolResult]**\n${toolResultContent}`,
+        )
         return
       }
     })
   })
+
+  flushPending()
 
   return messages
 }
