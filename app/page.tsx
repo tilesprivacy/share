@@ -1,118 +1,77 @@
 import Image from "next/image";
-import Link from "next/link";
+import { SiteFooter } from "@/components/site-footer";
+import banner from "@/public/atmospheric-banner.webp";
 
-const exampleHash =
-  "YXQ6Ly9kaWQ6cGxjOm1iazZ3Z214aWF0b3R6eTViM3E1N25hdy9ydW4udGlsZXMuY2hhdC5zZXNzaW9uU25hcHNob3QvM21wem5zNTVjbDYyaA==";
+const bannerAlt =
+  "@tmopsheric — Atmospheric sessions wordmark floating above the clouds";
 
 export default function Home() {
   return (
-    <main className="min-h-[100dvh] bg-background px-5 py-5 text-sm leading-6 text-foreground sm:px-8">
-      <header className="flex max-w-3xl items-center font-mono">
-        <Link
+    <main className="relative h-dvh w-full overflow-hidden bg-[#bdd8f3]">
+      {/* Ambient fill: blurred cover copy of the banner, visible wherever the
+          sharp layer doesn't reach (portrait letterboxing). Same asset, so it
+          resolves to the already-fetched image. */}
+      <Image
+        src={banner}
+        alt=""
+        fill
+        sizes="110vw"
+        placeholder="blur"
+        className="scale-110 object-cover blur-2xl"
+      />
+
+      {/* Portrait: banner at its intrinsic 3:2 ratio, vertically centered,
+          top/bottom edges feathered into the blurred backdrop so the
+          wordmark is never cropped and there is no visible seam. */}
+      <div className="absolute inset-x-0 top-1/2 hidden -translate-y-1/2 portrait:block">
+        <Image
+          src={banner}
+          alt={bannerAlt}
+          sizes="100vw"
+          placeholder="blur"
+          preload
+          className="h-auto w-full [mask-image:linear-gradient(to_bottom,transparent,black_18%,black_82%,transparent)]"
+        />
+      </div>
+
+      {/* Landscape: true full-bleed cover; at landscape aspect ratios the 3:2
+          frame is never cropped past the wordmark. */}
+      <Image
+        src={banner}
+        alt={bannerAlt}
+        fill
+        sizes="100vw"
+        placeholder="blur"
+        preload
+        className="hidden object-cover landscape:block"
+      />
+
+      <header className="absolute inset-x-0 top-0 z-10 px-5 pt-5 md:px-6 md:pt-6">
+        <a
           href="https://tiles.run"
-          className="inline-flex items-center gap-2 text-foreground underline decoration-transparent underline-offset-4 hover:decoration-current"
+          aria-label="Tiles home"
+          className="inline-flex items-center gap-1.5 text-base font-bold text-black"
         >
-          <span className="relative size-5 shrink-0">
-            <Image
-              src="/lighticon.png"
-              alt=""
-              fill
-              sizes="20px"
-              className="object-contain dark:hidden"
-              priority
-            />
-            <Image
-              src="/grey.png"
-              alt=""
-              fill
-              sizes="20px"
-              className="hidden object-contain dark:block"
-              priority
-            />
-          </span>
+          <Image src="/lighticon.png" alt="" width={24} height={24} />
           <span>Tiles</span>
-        </Link>
+        </a>
       </header>
 
-      <section className="mt-20 max-w-3xl sm:mt-28">
-        <h1 className="mt-4 max-w-2xl text-4xl font-normal leading-tight tracking-normal text-foreground sm:text-5xl">
-          Shared chat links for Tiles conversations.
-        </h1>
-        <p className="mt-6 max-w-2xl text-base leading-7 text-muted-foreground">
-          Tiles Share opens chat sessions created from the Tiles app. Links
-          resolve to ATproto-backed records, so conversations can be shared
-          without copying a transcript into another service.
-        </p>
-      </section>
-
-      <section className="mt-12 grid max-w-3xl gap-10 border-t border-border pt-8 sm:grid-cols-[10rem_1fr]">
-        <h2 className="font-mono text-xs font-normal uppercase tracking-[0.18em] text-muted-foreground">
-          Usage
-        </h2>
-        <div className="space-y-5">
-          <p className="text-muted-foreground">
-            In a Tiles chat, run one of these slash commands:
-          </p>
-          <pre className="overflow-x-auto font-mono text-sm leading-6 text-foreground">{`/share
-/share <sessionId>`}</pre>
-          <p className="text-muted-foreground">
-            The resulting link opens in this shape:
-          </p>
-          <pre className="overflow-x-auto font-mono text-sm leading-6 text-foreground">{`https://chat.tiles.run/<conversation-ID>`}</pre>
-        </div>
-      </section>
-
-      <section className="mt-10 grid max-w-3xl gap-10 border-t border-border pt-8 sm:grid-cols-[10rem_1fr]">
-        <h2 className="font-mono text-xs font-normal uppercase tracking-[0.18em] text-muted-foreground">
-          How It Works
-        </h2>
-        <div className="space-y-4 text-muted-foreground">
-          <p>
-            Public links resolve to a chat record on the user&apos;s ATproto
-            personal data server.
-          </p>
-          <p>
-            Private links store an encrypted transcript on the user&apos;s PDS.
-            The decryption key lives in the URL fragment and is not sent to the
-            server.
-          </p>
-          <p>Tiles does not store a copy of the shared conversation here.</p>
-        </div>
-      </section>
-
-      <section className="mt-10 grid max-w-3xl gap-10 border-t border-border pt-8 sm:grid-cols-[10rem_1fr]">
-        <h2 className="font-mono text-xs font-normal uppercase tracking-[0.18em] text-muted-foreground">
-          Links
-        </h2>
-        <div className="space-y-3 font-mono">
-          <Link
-            href={`/${exampleHash}`}
-            className="underline decoration-muted-foreground underline-offset-4 hover:decoration-current"
-          >
-            example shared chat
-          </Link>
-          <br />
-          <Link
-            href="https://tiles.run/book/manual#sharing-commands"
-            className="text-muted-foreground underline decoration-transparent underline-offset-4 hover:text-foreground hover:decoration-current"
-          >
-            sharing commands in the manual
-          </Link>
-        </div>
-      </section>
-
-      <footer className="mt-16 max-w-3xl border-t border-border py-6 font-mono text-xs leading-5 text-muted-foreground">
-        © 2026{" "}
+      {/* Sits below the baked-in wordmark at every viewport size: 62% of the
+          viewport on tall screens, pushed further down by 6.7vw when width
+          (and thus the cover-scaled artwork) outgrows the viewport height. */}
+      <div className="absolute inset-x-0 top-[max(62%,50%_+_6.7vw)] flex justify-center px-6">
         <a
-          href="https://www.tilesprivacy.org"
+          href="https://www.tiles.run/blog/atmospheric-sessions"
           target="_blank"
           rel="noopener noreferrer"
-          className="underline decoration-transparent underline-offset-4 hover:text-foreground hover:decoration-current"
+          className="inline-block px-3 py-2.5 text-center text-sm font-semibold text-black underline decoration-transparent underline-offset-4 transition hover:decoration-current sm:px-5 sm:text-base"
         >
-          Tiles Privacy
+          Learn more about Atmospheric sessions&nbsp;↗
         </a>
-        . All rights reserved.
-      </footer>
+      </div>
+
+      <SiteFooter />
     </main>
   );
 }
