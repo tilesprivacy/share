@@ -4,23 +4,23 @@ import { ShareSessionClient } from "../[...session]/share-session-client"
 
 export const metadata: Metadata = {
   title: "Shared chat session | Tiles",
-  description: "Shared public chat session on Tiles. Powered by ATproto.",
+  description: "Shared public chat session on Tiles. Powered by AT Protocol.",
   openGraph: {
     title: "Shared chat session | Tiles",
-    description: "Shared public chat session on Tiles. Powered by ATproto.",
+    description: "Shared public chat session on Tiles. Powered by AT Protocol.",
     images: [
       {
         url: `${SHARE_APP_ORIGIN}/api/og`,
         width: 1200,
         height: 630,
-        alt: "Shared public chat session on Tiles. Powered by ATproto.",
+        alt: "Shared public chat session on Tiles. Powered by AT Protocol.",
       },
     ],
   },
   twitter: {
     card: "summary_large_image",
     title: "Shared chat session | Tiles",
-    description: "Shared public chat session on Tiles. Powered by ATproto.",
+    description: "Shared public chat session on Tiles. Powered by AT Protocol.",
     images: [`${SHARE_APP_ORIGIN}/api/og`],
   },
 }

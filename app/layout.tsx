@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(SHARE_APP_ORIGIN),
   title: "Tiles Share | Shared chat links",
   description:
-    "View and share Tiles chat sessions through ATproto-backed public and private links.",
+    "View and share Tiles chat sessions through AT Protocol-backed public and private links.",
   icons: {
     icon: [
       { url: "/icon.svg", type: "image/svg+xml" },
