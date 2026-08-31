@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
 import { ImageResponse } from "next/og"
 import {
   getAtprotoData,
@@ -12,6 +14,14 @@ export const size = {
 }
 
 export const contentType = "image/png"
+
+// Crawlers (Twitterbot, Bluesky's cardyb) fetch this image once and cache the
+// result on their side, so a render that silently dropped the avatar sticks in
+// unfurls long after the upstream recovers. Fetch budgets below keep the total
+// render inside a crawler's patience; cache headers keep good renders at the
+// CDN and bad ones out of it.
+const AVATAR_FETCH_ATTEMPT_TIMEOUT_MS = 2_500
+const AVATAR_FETCH_TOTAL_BUDGET_MS = 6_000
 
 function normalizeAvatarUrlForOg(imageUrl: string): string {
   try {
@@ -37,10 +47,20 @@ function normalizeAvatarUrlForOg(imageUrl: string): string {
   }
 }
 
-async function toDataUrl(imageUrl: string): Promise<string | null> {
+async function fetchImageAsDataUrl(
+  imageUrl: string,
+  deadline: AbortSignal,
+): Promise<string | null> {
   try {
-    const response = await fetch(normalizeAvatarUrlForOg(imageUrl), {
-      cache: "no-store",
+    const response = await fetch(imageUrl, {
+      // Avatar URLs are CID-addressed (a new upload gets a new URL), so the
+      // bytes are immutable and safe to keep in the data cache; a warm cache
+      // also means a cdn.bsky.app hiccup can't strip the avatar from a render.
+      cache: "force-cache",
+      signal: AbortSignal.any([
+        deadline,
+        AbortSignal.timeout(AVATAR_FETCH_ATTEMPT_TIMEOUT_MS),
+      ]),
     })
     if (!response.ok) {
       return null
@@ -55,6 +75,41 @@ async function toDataUrl(imageUrl: string): Promise<string | null> {
   }
 }
 
+async function toDataUrl(imageUrl: string): Promise<string | null> {
+  const normalized = normalizeAvatarUrlForOg(imageUrl)
+  const candidates =
+    normalized === imageUrl ? [normalized] : [normalized, imageUrl]
+  const deadline = AbortSignal.timeout(AVATAR_FETCH_TOTAL_BUDGET_MS)
+
+  // One retry pass over the candidates so a single transient upstream failure
+  // doesn't bake the placeholder into an unfurl a crawler then caches.
+  for (const candidate of [...candidates, ...candidates]) {
+    if (deadline.aborted) {
+      break
+    }
+    const dataUrl = await fetchImageAsDataUrl(candidate, deadline)
+    if (dataUrl) {
+      return dataUrl
+    }
+  }
+
+  return null
+}
+
+let logoDataUrlPromise: Promise<string | null> | null = null
+
+function getLogoDataUrl(): Promise<string | null> {
+  logoDataUrlPromise ??= readFile(
+    join(process.cwd(), "public", "icon-mark-light.svg"),
+  )
+    .then((bytes) => `data:image/svg+xml;base64,${bytes.toString("base64")}`)
+    .catch(() => {
+      logoDataUrlPromise = null
+      return null
+    })
+  return logoDataUrlPromise
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const shareToken = url.searchParams.get("session") ?? ""
@@ -64,12 +119,13 @@ export async function GET(request: Request) {
   let isPrivateLink = false
   let shareVisibilityText = "Public"
   const [logoDataUrl, atData] = await Promise.all([
-    toDataUrl(`${url.origin}/icon-mark-light.svg`),
+    getLogoDataUrl(),
     getAtprotoData(shareToken, { signal: AbortSignal.timeout(5_000) }).catch(
       () => null,
     ),
   ])
 
+  let avatarExpected = false
   if (atData) {
     isPrivateLink = isEncryptedSharedSessionRecord(atData.record)
     shareVisibilityText = isPrivateLink ? "Private" : "Public"
@@ -79,10 +135,20 @@ export async function GET(request: Request) {
         ? handle
         : `@${handle}`
       : `@${atData.sharedBy.did}`
+    avatarExpected = Boolean(atData.sharedBy.avatarUrl)
     avatarDataUrl = atData.sharedBy.avatarUrl
       ? await toDataUrl(atData.sharedBy.avatarUrl)
       : null
   }
+
+  // A complete render is safe to hold at the CDN, which keeps crawler fetches
+  // fast and off the upstream waterfall. A degraded one (record or avatar
+  // missing) must not be cached anywhere, or the broken unfurl outlives the
+  // outage that caused it.
+  const isCompleteRender = atData !== null && (!avatarExpected || avatarDataUrl)
+  const cacheControl = isCompleteRender
+    ? "public, max-age=0, s-maxage=3600, stale-while-revalidate=86400"
+    : "no-store"
 
   return new ImageResponse(
     <div
@@ -184,6 +250,9 @@ export async function GET(request: Request) {
     {
       width: size.width,
       height: size.height,
+      headers: {
+        "cache-control": cacheControl,
+      },
     },
   )
 }
