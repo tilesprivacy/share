@@ -5,6 +5,7 @@ import SharePage, {
 
 interface SharePageProps {
   params: Promise<{ session: string[] }>
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }
 
 export const dynamic = "force-dynamic"

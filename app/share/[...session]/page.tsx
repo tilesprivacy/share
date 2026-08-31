@@ -8,6 +8,7 @@ import { ShareSessionClient } from "./share-session-client"
 
 interface SharePageProps {
   params: Promise<{ session: string[] }>
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }
 
 const DEFAULT_SHARED_SESSION_DESCRIPTION =
@@ -35,10 +36,19 @@ function getSharedSessionTitle(
 
 export async function generateMetadata({
   params,
+  searchParams,
 }: SharePageProps): Promise<Metadata> {
   const { session } = await params
   const shareToken = session.join("/")
-  const imagePath = `${SHARE_APP_ORIGIN}/api/og?session=${encodeURIComponent(shareToken)}`
+  const imageQuery = new URLSearchParams({ session: shareToken })
+  // Crawlers (notably Twitter) cache the card image by the image URL, so a
+  // cache-busted page URL must produce a different image URL too — otherwise
+  // a stale image outlives any bust of the page link.
+  const { v } = await searchParams
+  if (typeof v === "string" && v) {
+    imageQuery.set("v", v)
+  }
+  const imagePath = `${SHARE_APP_ORIGIN}/api/og?${imageQuery.toString()}`
   let title = "Shared chat session | Tiles"
   let description = DEFAULT_SHARED_SESSION_DESCRIPTION
 
